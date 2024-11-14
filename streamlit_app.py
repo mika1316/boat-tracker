@@ -2,6 +2,7 @@ import streamlit as st
 import streamlit.components.v1 as components
 import folium
 from datetime import datetime, timezone
+import time
 from collections import deque
 import random
 from math import radians, sin, cos, sqrt, atan2
@@ -23,6 +24,7 @@ class GarminShareTracker:
         self.noronha_coords = (-3.8547, -32.4248)
         self.radius_nm = 10
         self.proximity_circle = None
+        self.last_update_time = {}  # Guardar tiempo de última actualización por barco
         
     def nautical_miles_to_meters(self, nm):
         return nm * 1852
@@ -52,19 +54,40 @@ class GarminShareTracker:
             'history': deque(maxlen=self.history_length),
             'last_update': None
         }
+        self.last_update_time[name] = 0
 
-    def get_position(self, share_id):
+    def get_position(self, share_id, boat_name):
+        """Obtiene la posición desde Garmin Share con manejo de límites de peticiones"""
         try:
-            position_url = f"https://share.garmin.com/Feed/Share/{share_id}"
-            track_url = f"https://share.garmin.com/Feed/LastTrack/{share_id}"
+            # Verificar tiempo desde última actualización
+            current_time = time.time()
+            if current_time - self.last_update_time.get(boat_name, 0) < 60:
+                return None  # No actualizar si han pasado menos de 60 segundos
             
-            response = requests.get(position_url)
+            # Añadir headers para identificar mejor las peticiones
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                'Accept': 'application/json'
+            }
+            
+            # Añadir delay entre peticiones
+            time.sleep(2)
+            
+            position_url = f"https://share.garmin.com/Feed/Share/{share_id}"
+            response = requests.get(position_url, headers=headers)
+            
+            if response.status_code == 429:
+                st.warning(f"Límite de peticiones alcanzado para {boat_name}. Esperando...")
+                time.sleep(60)
+                response = requests.get(position_url, headers=headers)
+            
             if response.status_code != 200:
                 raise Exception(f"Error accessing Garmin Share: {response.status_code}")
             
             data = response.json()
-            track_response = requests.get(track_url)
-            track_data = track_response.json() if track_response.status_code == 200 else None
+            
+            # Actualizar tiempo de última petición exitosa
+            self.last_update_time[boat_name] = current_time
             
             location = data.get('locations', [{}])[0]
             return {
@@ -73,14 +96,13 @@ class GarminShareTracker:
                 'timestamp': location.get('timestamp'),
                 'speed': location.get('speed', {}).get('value', 0),
                 'course': location.get('course', 0),
-                'track': track_data,
                 'elevation': location.get('elevation', {}).get('value', 0)
             }
         except Exception as e:
-            st.error(f"Error getting position from Garmin Share: {e}")
+            st.error(f"Error getting position from Garmin Share for {boat_name}: {e}")
             return None
 
-    def create_popup_content(self, boat_name, position):
+def create_popup_content(self, boat_name, position):
         try:
             timestamp = datetime.fromtimestamp(position['timestamp']/1000, timezone.utc)
             local_time = timestamp.astimezone()
@@ -151,7 +173,7 @@ class GarminShareTracker:
             ).add_to(self.map)
 
     def update_boat_position(self, boat_name, boat_info):
-        position = self.get_position(boat_info['share_id'])
+        position = self.get_position(boat_info['share_id'], boat_name)
         
         if position:
             boat_info['history'].append([position['lat'], position['lon']])
@@ -171,20 +193,18 @@ class GarminShareTracker:
             marker.add_to(self.map)
             boat_info['marker'] = marker
 
-            if position.get('track'):
-                track_points = [[p['latitude'], p['longitude']] 
-                              for p in position['track']]
-                if track_points:
-                    path = folium.PolyLine(
-                        locations=track_points,
-                        weight=3,
-                        color=boat_info['color'],
-                        opacity=0.8
-                    )
-                    path.add_to(self.map)
-                    boat_info['path'] = path
+            # Dibujar la ruta con el historial
+            if len(boat_info['history']) > 1:
+                path = folium.PolyLine(
+                    locations=list(boat_info['history']),
+                    weight=3,
+                    color=boat_info['color'],
+                    opacity=0.8
+                )
+                path.add_to(self.map)
+                boat_info['path'] = path
 
-    def initialize_map(self, center_lat=-5.0, center_lon=-35.0, zoom=6):
+def initialize_map(self, center_lat=-5.0, center_lon=-35.0, zoom=6):
         self.map = folium.Map(
             location=[center_lat, center_lon],
             zoom_start=zoom,
@@ -206,26 +226,45 @@ class GarminShareTracker:
 # Título de la aplicación
 st.title('🚢 Rastreador de Veleros')
 
-# Inicializar el rastreador
-tracker = GarminShareTracker()
+# Configuración de la sesión
+if 'last_update' not in st.session_state:
+    st.session_state.last_update = datetime.now()
+    st.session_state.tracker = GarminShareTracker()
+    
+    # Añadir los veleros
+    st.session_state.tracker.add_boat("Contessa", "https://share.garmin.com/contessa")
+    st.session_state.tracker.add_boat("Azuluc", "https://share.garmin.com/AZULUC")
+    st.session_state.tracker.add_boat("Finisterre", "https://share.garmin.com/FINISTERRE")
+    st.session_state.tracker.add_boat("Yorugua", "https://share.garmin.com/YoruguaSY")
+    
+    # Inicializar mapa
+    st.session_state.tracker.initialize_map()
 
-# Añadir los veleros
-tracker.add_boat("Contessa", "https://share.garmin.com/contessa")
-tracker.add_boat("Azuluc", "https://share.garmin.com/AZULUC")
-tracker.add_boat("Finisterre", "https://share.garmin.com/FINISTERRE")
-tracker.add_boat("Yorugua", "https://share.garmin.com/YoruguaSY")
+# Crear columnas para organizar la interfaz
+col1, col2 = st.columns([4, 1])
 
-# Crear y actualizar el mapa
-tracker.initialize_map()
-map_obj = tracker.update_positions()
+with col1:
+    # Mostrar el mapa
+    map_obj = st.session_state.tracker.update_positions()
+    st.components.v1.html(map_obj._repr_html_(), height=600)
 
-# Mostrar el mapa
-map_data = st.components.v1.html(map_obj._repr_html_(), height=600)
+with col2:
+    # Información y controles
+    st.write("### Información")
+    st.write(f"Última actualización: {st.session_state.last_update.strftime('%Y-%m-%d %H:%M:%S')}")
+    
+    # Botón de actualización manual
+    if st.button('Actualizar Posiciones'):
+        st.session_state.last_update = datetime.now()
+        map_obj = st.session_state.tracker.update_positions()
+        st.experimental_rerun()
 
-# Botón de actualización manual
-if st.button('Actualizar Posiciones'):
-    map_obj = tracker.update_positions()
-    map_data = st.components.v1.html(map_obj._repr_html_(), height=600)
+    # Mostrar leyenda de barcos
+    st.write("### Barcos")
+    for name, info in st.session_state.tracker.boats.items():
+        st.markdown(f"* <span style='color: {info['color']}'>{name}</span>", unsafe_allow_html=True)
 
-# Mostrar hora de última actualización
-st.write(f"Última actualización: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+# Actualización automática cada 5 minutos
+if (datetime.now() - st.session_state.last_update).seconds > 300:  # 5 minutos
+    st.session_state.last_update = datetime.now()
+    st.experimental_rerun()
