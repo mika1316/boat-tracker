@@ -189,12 +189,9 @@ class GarminShareTracker:
         self.map = folium.Map(
             location=[center_lat, center_lon],
             zoom_start=zoom,
-            tiles='OpenStreetMap'
+            tiles='OpenStreetMap',
+            attr='Map data &copy; <a href="https://www.openstreetmap.org/">OpenStreetMap</a> contributors'
         )
-        
-        folium.TileLayer('Stamen Terrain').add_to(self.map)
-        folium.TileLayer('CartoDB positron').add_to(self.map)
-        folium.LayerControl().add_to(self.map)
 
     def update_positions(self):
         if self.map is None:
