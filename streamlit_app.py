@@ -2,7 +2,6 @@ import streamlit as st
 import streamlit.components.v1 as components
 import folium
 from datetime import datetime, timezone
-import time
 from collections import deque
 import random
 from math import radians, sin, cos, sqrt, atan2
@@ -228,11 +227,5 @@ if st.button('Actualizar Posiciones'):
     map_obj = tracker.update_positions()
     map_data = st.components.v1.html(map_obj._repr_html_(), height=600)
 
-# Actualización automática
-if 'counter' not in st.session_state:
-    st.session_state.counter = 0
-
-st.session_state.counter += 1
-st.write(f"El mapa se actualiza automáticamente cada 5 minutos. Última actualización: {datetime.now().strftime('%H:%M:%S')}")
-time.sleep(300)  # 5 minutos
-st.rerun()
+# Mostrar hora de última actualización
+st.write(f"Última actualización: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
