@@ -228,7 +228,11 @@ if st.button('Actualizar Posiciones'):
     map_obj = tracker.update_positions()
     map_data = st.components.v1.html(map_obj._repr_html_(), height=600)
 
-# Actualización automática cada 5 minutos
-st.write("El mapa se actualiza automáticamente cada 5 minutos")
-time.sleep(1)
-st.experimental_rerun()
+# Actualización automática
+if 'counter' not in st.session_state:
+    st.session_state.counter = 0
+
+st.session_state.counter += 1
+st.write(f"El mapa se actualiza automáticamente cada 5 minutos. Última actualización: {datetime.now().strftime('%H:%M:%S')}")
+time.sleep(300)  # 5 minutos
+st.rerun()
