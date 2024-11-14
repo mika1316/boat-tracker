@@ -7,6 +7,7 @@ from collections import deque
 import random
 from math import radians, sin, cos, sqrt, atan2
 import requests
+import json
 
 # Configuración de la página
 st.set_page_config(
@@ -25,6 +26,7 @@ class GarminShareTracker:
         self.radius_nm = 10
         self.proximity_circle = None
         self.last_update_time = {}
+        self.session = requests.Session()
         
     def nautical_miles_to_meters(self, nm):
         return nm * 1852
@@ -53,53 +55,86 @@ class GarminShareTracker:
             'color': color,
             'history': deque(maxlen=self.history_length),
             'last_update': None,
-            'cached_position': None
+            'cached_position': None,
+            'session': requests.Session()  # Sesión individual por barco
         }
         self.last_update_time[name] = 0
 
     def get_position(self, share_id, boat_name):
         try:
             current_time = time.time()
-            # Esperar al menos 5 minutos entre actualizaciones del mismo barco
+            # Usar caché si la última actualización fue hace menos de 5 minutos
             if current_time - self.last_update_time.get(boat_name, 0) < 300:
-                st.info(f"Esperando para actualizar {boat_name}...")
-                # Usar datos en caché si están disponibles
                 boat_info = self.boats.get(boat_name)
                 if boat_info and boat_info.get('cached_position'):
+                    st.info(f"Usando datos en caché para {boat_name}")
                     return boat_info['cached_position']
-                return None
-            
+
+            # Headers que simulan un navegador real
             headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-                'Accept': 'application/json',
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
                 'Accept-Language': 'en-US,en;q=0.9',
+                'Accept-Encoding': 'gzip, deflate, br',
                 'Connection': 'keep-alive',
+                'Upgrade-Insecure-Requests': '1',
+                'Sec-Fetch-Dest': 'document',
+                'Sec-Fetch-Mode': 'navigate',
+                'Sec-Fetch-Site': 'none',
+                'Sec-Fetch-User': '?1',
+                'Cache-Control': 'max-age=0',
                 'Referer': 'https://share.garmin.com/'
             }
-            
-            # Esperar 10 segundos entre peticiones de diferentes barcos
-            time.sleep(10)
-            
-            position_url = f"https://share.garmin.com/Feed/Share/{share_id}"
-            response = requests.get(position_url, headers=headers)
-            
-            if response.status_code == 429:
-                st.warning(f"Límite de peticiones alcanzado para {boat_name}. Esperando 2 minutos...")
-                time.sleep(120)
-                response = requests.get(position_url, headers=headers)
-                
-                if response.status_code == 429:
-                    st.warning(f"Segundo intento fallido para {boat_name}. Esperando 5 minutos...")
-                    time.sleep(300)
-                    response = requests.get(position_url, headers=headers)
+
+            # Usar la sesión específica del barco
+            session = self.boats[boat_name]['session']
+
+            # Primero, visitar la página principal del share
+            base_url = f"https://share.garmin.com/{share_id}"
+            response = session.get(base_url, headers=headers, timeout=10)
             
             if response.status_code != 200:
-                raise Exception(f"Error accessing Garmin Share: {response.status_code}")
+                st.warning(f"Error accediendo a la página principal de {boat_name}")
+                time.sleep(5)
             
-            data = response.json()
-            self.last_update_time[boat_name] = current_time
-            
-            location = data.get('locations', [{}])[0]
+            # Esperar como lo haría un usuario real
+            time.sleep(2)
+
+            # Actualizar headers para la petición API
+            api_headers = headers.copy()
+            api_headers.update({
+                'Accept': 'application/json, text/javascript, */*; q=0.01',
+                'X-Requested-With': 'XMLHttpRequest'
+            })
+
+            # Hacer la petición a la API
+            position_url = f"https://share.garmin.com/Feed/Share/{share_id}"
+            response = session.get(position_url, headers=api_headers, timeout=10)
+
+            # Manejar límite de peticiones
+            if response.status_code == 429:
+                st.warning(f"Límite de peticiones alcanzado para {boat_name}. Esperando...")
+                time.sleep(120)
+                response = session.get(position_url, headers=api_headers, timeout=10)
+
+            # Verificar el contenido de la respuesta
+            if response.status_code != 200:
+                st.error(f"Error de servidor para {boat_name}: {response.status_code}")
+                return None
+
+            # Intentar decodificar la respuesta JSON
+            try:
+                data = response.json()
+            except json.JSONDecodeError:
+                st.error(f"Respuesta no válida para {boat_name}: {response.text[:100]}")
+                return None
+
+            if not data.get('locations'):
+                st.error(f"No hay datos de posición para {boat_name}")
+                return None
+
+            # Procesar los datos
+            location = data['locations'][0]
             position_data = {
                 'lat': location.get('latitude'),
                 'lon': location.get('longitude'),
@@ -108,20 +143,20 @@ class GarminShareTracker:
                 'course': location.get('course', 0),
                 'elevation': location.get('elevation', {}).get('value', 0)
             }
-            
-            # Guardar en caché
-            boat_info = self.boats.get(boat_name)
-            if boat_info:
-                boat_info['cached_position'] = position_data
-            
+
+            # Actualizar caché y tiempo
+            self.last_update_time[boat_name] = current_time
+            self.boats[boat_name]['cached_position'] = position_data
+
             return position_data
-            
+
+        except requests.exceptions.Timeout:
+            st.error(f"Timeout al obtener datos de {boat_name}")
+            return None
         except Exception as e:
-            st.error(f"Error getting position from Garmin Share for {boat_name}: {e}")
-            # Intentar usar datos en caché
+            st.error(f"Error obteniendo posición de {boat_name}: {str(e)}")
             boat_info = self.boats.get(boat_name)
             if boat_info and boat_info.get('cached_position'):
-                st.info(f"Usando datos en caché para {boat_name}")
                 return boat_info['cached_position']
             return None
 
@@ -266,9 +301,12 @@ if 'last_update' not in st.session_state:
 col1, col2 = st.columns([4, 1])
 
 with col1:
-    # Mostrar el mapa
-    map_obj = st.session_state.tracker.update_positions()
-    st.components.v1.html(map_obj._repr_html_(), height=600)
+    try:
+        # Mostrar el mapa
+        map_obj = st.session_state.tracker.update_positions()
+        st.components.v1.html(map_obj._repr_html_(), height=600)
+    except Exception as e:
+        st.error(f"Error al actualizar el mapa: {str(e)}")
 
 with col2:
     # Información y controles
@@ -277,9 +315,11 @@ with col2:
     
     # Botón de actualización manual
     if st.button('Actualizar Posiciones'):
-        st.session_state.last_update = datetime.now()
-        map_obj = st.session_state.tracker.update_positions()
-        st.rerun()
+        try:
+            st.session_state.last_update = datetime.now()
+            st.rerun()
+        except Exception as e:
+            st.error(f"Error al actualizar: {str(e)}")
 
     # Mostrar leyenda de barcos
     st.write("### Barcos")
