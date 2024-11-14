@@ -24,7 +24,7 @@ class GarminShareTracker:
         self.noronha_coords = (-3.8547, -32.4248)
         self.radius_nm = 10
         self.proximity_circle = None
-        self.last_update_time = {}  # Guardar tiempo de última actualización por barco
+        self.last_update_time = {}
         
     def nautical_miles_to_meters(self, nm):
         return nm * 1852
@@ -57,20 +57,16 @@ class GarminShareTracker:
         self.last_update_time[name] = 0
 
     def get_position(self, share_id, boat_name):
-        """Obtiene la posición desde Garmin Share con manejo de límites de peticiones"""
         try:
-            # Verificar tiempo desde última actualización
             current_time = time.time()
             if current_time - self.last_update_time.get(boat_name, 0) < 60:
-                return None  # No actualizar si han pasado menos de 60 segundos
+                return None
             
-            # Añadir headers para identificar mejor las peticiones
             headers = {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
                 'Accept': 'application/json'
             }
             
-            # Añadir delay entre peticiones
             time.sleep(2)
             
             position_url = f"https://share.garmin.com/Feed/Share/{share_id}"
@@ -85,8 +81,6 @@ class GarminShareTracker:
                 raise Exception(f"Error accessing Garmin Share: {response.status_code}")
             
             data = response.json()
-            
-            # Actualizar tiempo de última petición exitosa
             self.last_update_time[boat_name] = current_time
             
             location = data.get('locations', [{}])[0]
@@ -102,7 +96,7 @@ class GarminShareTracker:
             st.error(f"Error getting position from Garmin Share for {boat_name}: {e}")
             return None
 
-def create_popup_content(self, boat_name, position):
+    def create_popup_content(self, boat_name, position):
         try:
             timestamp = datetime.fromtimestamp(position['timestamp']/1000, timezone.utc)
             local_time = timestamp.astimezone()
@@ -193,7 +187,6 @@ def create_popup_content(self, boat_name, position):
             marker.add_to(self.map)
             boat_info['marker'] = marker
 
-            # Dibujar la ruta con el historial
             if len(boat_info['history']) > 1:
                 path = folium.PolyLine(
                     locations=list(boat_info['history']),
@@ -204,7 +197,7 @@ def create_popup_content(self, boat_name, position):
                 path.add_to(self.map)
                 boat_info['path'] = path
 
-def initialize_map(self, center_lat=-5.0, center_lon=-35.0, zoom=6):
+    def initialize_map(self, center_lat=-5.0, center_lon=-35.0, zoom=6):
         self.map = folium.Map(
             location=[center_lat, center_lon],
             zoom_start=zoom,
@@ -265,6 +258,6 @@ with col2:
         st.markdown(f"* <span style='color: {info['color']}'>{name}</span>", unsafe_allow_html=True)
 
 # Actualización automática cada 5 minutos
-if (datetime.now() - st.session_state.last_update).seconds > 300:  # 5 minutos
+if (datetime.now() - st.session_state.last_update).seconds > 300:
     st.session_state.last_update = datetime.now()
     st.experimental_rerun()
