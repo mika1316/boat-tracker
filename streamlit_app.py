@@ -52,30 +52,46 @@ class GarminShareTracker:
             'path': None,
             'color': color,
             'history': deque(maxlen=self.history_length),
-            'last_update': None
+            'last_update': None,
+            'cached_position': None
         }
         self.last_update_time[name] = 0
 
     def get_position(self, share_id, boat_name):
         try:
             current_time = time.time()
-            if current_time - self.last_update_time.get(boat_name, 0) < 60:
+            # Esperar al menos 5 minutos entre actualizaciones del mismo barco
+            if current_time - self.last_update_time.get(boat_name, 0) < 300:
+                st.info(f"Esperando para actualizar {boat_name}...")
+                # Usar datos en caché si están disponibles
+                boat_info = self.boats.get(boat_name)
+                if boat_info and boat_info.get('cached_position'):
+                    return boat_info['cached_position']
                 return None
             
             headers = {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-                'Accept': 'application/json'
+                'Accept': 'application/json',
+                'Accept-Language': 'en-US,en;q=0.9',
+                'Connection': 'keep-alive',
+                'Referer': 'https://share.garmin.com/'
             }
             
-            time.sleep(2)
+            # Esperar 10 segundos entre peticiones de diferentes barcos
+            time.sleep(10)
             
             position_url = f"https://share.garmin.com/Feed/Share/{share_id}"
             response = requests.get(position_url, headers=headers)
             
             if response.status_code == 429:
-                st.warning(f"Límite de peticiones alcanzado para {boat_name}. Esperando...")
-                time.sleep(60)
+                st.warning(f"Límite de peticiones alcanzado para {boat_name}. Esperando 2 minutos...")
+                time.sleep(120)
                 response = requests.get(position_url, headers=headers)
+                
+                if response.status_code == 429:
+                    st.warning(f"Segundo intento fallido para {boat_name}. Esperando 5 minutos...")
+                    time.sleep(300)
+                    response = requests.get(position_url, headers=headers)
             
             if response.status_code != 200:
                 raise Exception(f"Error accessing Garmin Share: {response.status_code}")
@@ -84,7 +100,7 @@ class GarminShareTracker:
             self.last_update_time[boat_name] = current_time
             
             location = data.get('locations', [{}])[0]
-            return {
+            position_data = {
                 'lat': location.get('latitude'),
                 'lon': location.get('longitude'),
                 'timestamp': location.get('timestamp'),
@@ -92,8 +108,21 @@ class GarminShareTracker:
                 'course': location.get('course', 0),
                 'elevation': location.get('elevation', {}).get('value', 0)
             }
+            
+            # Guardar en caché
+            boat_info = self.boats.get(boat_name)
+            if boat_info:
+                boat_info['cached_position'] = position_data
+            
+            return position_data
+            
         except Exception as e:
             st.error(f"Error getting position from Garmin Share for {boat_name}: {e}")
+            # Intentar usar datos en caché
+            boat_info = self.boats.get(boat_name)
+            if boat_info and boat_info.get('cached_position'):
+                st.info(f"Usando datos en caché para {boat_name}")
+                return boat_info['cached_position']
             return None
 
     def create_popup_content(self, boat_name, position):
@@ -250,14 +279,17 @@ with col2:
     if st.button('Actualizar Posiciones'):
         st.session_state.last_update = datetime.now()
         map_obj = st.session_state.tracker.update_positions()
-        st.experimental_rerun()
+        st.rerun()
 
     # Mostrar leyenda de barcos
     st.write("### Barcos")
     for name, info in st.session_state.tracker.boats.items():
         st.markdown(f"* <span style='color: {info['color']}'>{name}</span>", unsafe_allow_html=True)
 
-# Actualización automática cada 5 minutos
-if (datetime.now() - st.session_state.last_update).seconds > 300:
+# Actualización menos frecuente y mostrar tiempo restante
+if (datetime.now() - st.session_state.last_update).seconds > 600:  # 10 minutos
     st.session_state.last_update = datetime.now()
-    st.experimental_rerun()
+    st.rerun()
+
+tiempo_restante = 600 - (datetime.now() - st.session_state.last_update).seconds
+st.write(f"Próxima actualización en: {tiempo_restante//60} minutos y {tiempo_restante%60} segundos")
